@@ -1,0 +1,56 @@
+name: Update Adopt Me values
+
+on:
+  schedule:
+    # Top of every hour (UTC). GitHub's cron is best-effort and can lag
+    # by several minutes when the runner queue is busy.
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+# Allow the job to push the regenerated JSON back to the repo.
+permissions:
+  contents: write
+
+concurrency:
+  group: update-values
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # elve_scrape.py is stdlib-only, so there is nothing to pip install.
+      - name: Scrape elvebredd
+        run: python elve_scrape.py elve-values.json
+
+      - name: Sanity check output
+        run: |
+          python - <<'PY'
+          import json, sys
+          d = json.load(open("elve-values.json", encoding="utf-8"))
+          pets, items = len(d["pets"]), len(d["items"])
+          print(f"{pets} pets, {items} items, refs={d['refs']}")
+          # Guard against overwriting good data with a truncated scrape.
+          if pets < 300 or items < 800:
+              sys.exit(f"refusing to commit: suspiciously small scrape ({pets} pets, {items} items)")
+          PY
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add elve-values.json
+          if git diff --staged --quiet; then
+            echo "No value changes this run."
+          else
+            git commit -m "chore: refresh elve-values.json [skip ci]"
+            git push
+          fi
